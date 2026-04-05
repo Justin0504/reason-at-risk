@@ -1,0 +1,29 @@
+# Experiment configuration
+backend:
+  provider: openai         # openai | anthropic
+  model: gpt-4o-mini       # gpt-4o-mini | gpt-4o | claude-sonnet-4-20250514
+
+benchmarks:
+  - gsm8k
+  # - math500
+  # - prontoqa
+  # - blocksworld
+  # - humaneval
+
+max_samples: 50            # set to null for full benchmark
+seed: 42
+
+methods:
+  - no_cot
+  - cot
+  - self_consistency
+  - confidence_adaptive
+  - oracle_monitor
+
+self_consistency:
+  k: 5
+
+confidence_adaptive:
+  threshold: -0.5
+
+output_dir: results/

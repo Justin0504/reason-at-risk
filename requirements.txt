@@ -1,0 +1,5 @@
+openai>=1.0
+anthropic>=0.20
+datasets>=2.14
+sympy>=1.12
+pyyaml>=6.0
