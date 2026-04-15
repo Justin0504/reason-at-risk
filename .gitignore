@@ -1,5 +1,31 @@
+# Secrets
 .env
+
+# Results (large, reproduced by scripts)
 results/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+
+# Data cache
 data/cache/
+
+# OS
+.DS_Store
+
+# Binary / large
+*.pkl
+*.npz
+*.pt
+*.bin
+*.safetensors
+
+# Build artifacts
+overleaf_upload*.zip
+*.log
+
+# IDE
+.vscode/
+.idea/

@@ -65,10 +65,12 @@ class ReasoningPipeline:
         backend: LLMBackend,
         monitor: ConflictMonitor | None = None,
         strategy: ResponseStrategy | None = None,
+        llm_monitor: ConflictMonitor | None = None,
     ):
         self.backend = backend
         self.monitor = monitor
         self.strategy = strategy
+        self.llm_monitor = llm_monitor
 
     # ── Baselines ──────────────────────────────────────────────
 
@@ -142,7 +144,46 @@ class ReasoningPipeline:
             metadata={"avg_logprob": avg_lp, "re_triggered": extra > 0},
         )
 
-    # ── Core: CoT + Conflict Monitor ──────────────────────────
+    # ── Core methods ─────────────────────────────────────────
+
+    def run_light_then_deep(self, problem: dict) -> ReasoningTrace:
+        """'Reason Only at Risk' —题级版本.
+
+        1. No-CoT 先快速出答案
+        2. 用一次轻量 verification prompt 判断答案是否 risky
+        3. 只有 risky 时才走完整 CoT
+        """
+        # Step 1: fast answer
+        fast_trace = self.run_no_cot(problem)
+        fast_answer = fast_trace.final_answer
+        fast_tokens = fast_trace.total_tokens
+
+        # Step 2: lightweight risk check — ask model to verify without full re-solve
+        verify_prompt = (
+            f"Problem: {problem['problem']}\n\n"
+            f"A student answered: {fast_answer}\n\n"
+            f"Without solving the full problem, quickly check: does this answer seem reasonable? "
+            f"Reply with ONLY one word: SAFE or RISKY."
+        )
+        verify_resp = self.backend.generate(
+            [{"role": "user", "content": verify_prompt}],
+            temperature=0.0, max_tokens=10,
+        )[0]
+        verify_tokens = verify_resp.total_tokens
+        is_risky = "RISKY" in verify_resp.text.upper()
+
+        # Step 3: only do full CoT if risky
+        if is_risky:
+            deep_trace = self.run_cot(problem)
+            deep_trace.total_tokens += fast_tokens + verify_tokens
+            deep_trace.total_extra_tokens = deep_trace.total_tokens - fast_tokens - verify_tokens
+            deep_trace.metadata["risk_check"] = "risky"
+            deep_trace.metadata["fast_answer"] = fast_answer
+            return deep_trace
+        else:
+            fast_trace.total_tokens = fast_tokens + verify_tokens
+            fast_trace.metadata["risk_check"] = "safe"
+            return fast_trace
 
     def run_cot_with_monitor(self, problem: dict) -> ReasoningTrace:
         if not self.monitor or not self.strategy:
@@ -171,6 +212,125 @@ class ReasoningPipeline:
 
         trace.total_extra_tokens = extra_tokens
         trace.total_tokens += extra_tokens
+        return trace
+
+    def run_always_refine(self, problem: dict) -> ReasoningTrace:
+        """Ablation: always trigger refine on the first step, no conflict detection."""
+        trace = self.run_cot(problem)
+        if not self.strategy or not trace.steps:
+            return trace
+
+        # Always refine from step 0 — pretend there's a conflict
+        corrected = self.strategy.respond(
+            trace.steps, 0, "forced", problem, self.backend
+        )
+        extra_tokens = 0
+        if corrected:
+            extra_tokens = sum(s.tokens for s in corrected)
+            trace.steps = trace.steps[:1] + corrected
+            trace.final_answer = self._extract_answer(
+                "\n".join(s.text for s in trace.steps)
+            )
+        trace.total_extra_tokens = extra_tokens
+        trace.total_tokens += extra_tokens
+        trace.metadata["ablation"] = "always_refine"
+        return trace
+
+    def run_random_trigger(self, problem: dict, trigger_prob: float = 0.5) -> ReasoningTrace:
+        """Ablation: randomly trigger refine with given probability."""
+        import random as _rand
+        trace = self.run_cot(problem)
+        if not self.strategy or not trace.steps:
+            return trace
+
+        extra_tokens = 0
+        for i, step in enumerate(trace.steps):
+            if _rand.random() < trigger_prob:
+                corrected = self.strategy.respond(
+                    trace.steps, i, "random", problem, self.backend
+                )
+                if corrected:
+                    step.extra_reasoning_triggered = True
+                    extra_tokens = sum(s.tokens for s in corrected)
+                    trace.steps = trace.steps[:i+1] + corrected
+                    trace.final_answer = self._extract_answer(
+                        "\n".join(s.text for s in trace.steps)
+                    )
+                    break
+
+        trace.total_extra_tokens = extra_tokens
+        trace.total_tokens += extra_tokens
+        trace.metadata["ablation"] = "random_trigger"
+        return trace
+
+    def run_cot_with_monitor_no_branch(self, problem: dict) -> ReasoningTrace:
+        """Ablation: conflict monitor but ignore 'branch' type signals."""
+        if not self.monitor or not self.strategy:
+            return self.run_cot(problem)
+
+        trace = self.run_cot(problem)
+        extra_tokens = 0
+
+        for i, step in enumerate(trace.steps):
+            conflict, ctype = self.monitor.check(trace.steps[:i+1], problem)
+            # Filter out branch conflicts
+            if ctype == "branch":
+                conflict = False
+                ctype = None
+            step.conflict_detected = conflict
+            step.conflict_type = ctype
+
+            if conflict:
+                corrected = self.strategy.respond(
+                    trace.steps, i, ctype, problem, self.backend
+                )
+                if corrected:
+                    step.extra_reasoning_triggered = True
+                    extra_tokens += sum(s.tokens for s in corrected)
+                    trace.steps = trace.steps[:i+1] + corrected
+                    trace.final_answer = self._extract_answer(
+                        "\n".join(s.text for s in trace.steps)
+                    )
+                    break
+
+        trace.total_extra_tokens = extra_tokens
+        trace.total_tokens += extra_tokens
+        trace.metadata["ablation"] = "no_branch"
+        return trace
+
+    def run_cot_with_llm_monitor(self, problem: dict) -> ReasoningTrace:
+        """CoT with LLM-based conflict monitor — smarter, lower trigger rate."""
+        if not self.llm_monitor or not self.strategy:
+            return self.run_cot(problem)
+
+        trace = self.run_cot(problem)
+        extra_tokens = 0
+        verify_tokens = 0
+
+        for i, step in enumerate(trace.steps):
+            conflict, ctype = self.llm_monitor.check(trace.steps[:i+1], problem)
+            step.conflict_detected = conflict
+            step.conflict_type = ctype
+
+            if conflict:
+                corrected = self.strategy.respond(
+                    trace.steps, i, ctype, problem, self.backend
+                )
+                if corrected:
+                    step.extra_reasoning_triggered = True
+                    extra_tokens += sum(s.tokens for s in corrected)
+                    trace.steps = trace.steps[:i+1] + corrected
+                    trace.final_answer = self._extract_answer(
+                        "\n".join(s.text for s in trace.steps)
+                    )
+                    break
+
+        verify_tokens = self.llm_monitor.total_verify_tokens
+        self.llm_monitor.total_verify_tokens = 0  # reset for next problem
+        trace.total_extra_tokens = extra_tokens + verify_tokens
+        trace.total_tokens += extra_tokens + verify_tokens
+        trace.metadata["verify_tokens"] = verify_tokens
+        trace.metadata["monitor"] = "llm"
         return trace
 
     # ── Helpers ────────────────────────────────────────────────
