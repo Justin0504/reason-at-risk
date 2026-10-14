@@ -1,0 +1,39 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite the paper below."
+title: "Hidden Error Awareness in Chain-of-Thought Reasoning: The Signal Is Diagnostic, Not Causal"
+authors:
+  - family-names: "Yuan"
+    given-names: "Aojie"
+    website: "https://aojieyuan.com"
+  - family-names: "Su"
+    given-names: "Zhiyuan Julian"
+  - family-names: "Zhang"
+    given-names: "Haiyue"
+  - family-names: "Nian"
+    given-names: "Yi"
+  - family-names: "Zhao"
+    given-names: "Yue"
+repository-code: "https://github.com/Justin0504/reason-at-risk"
+url: "https://aojieyuan.com/papers/hidden-error-awareness"
+identifiers:
+  - type: doi
+    value: "10.48550/arXiv.2605.09502"
+preferred-citation:
+  type: conference-paper
+  conference:
+    name: "Mechanistic Interpretability Workshop at ICML 2026"
+  title: "Hidden Error Awareness in Chain-of-Thought Reasoning: The Signal Is Diagnostic, Not Causal"
+  authors:
+    - family-names: "Yuan"
+      given-names: "Aojie"
+    - family-names: "Su"
+      given-names: "Zhiyuan Julian"
+    - family-names: "Zhang"
+      given-names: "Haiyue"
+    - family-names: "Nian"
+      given-names: "Yi"
+    - family-names: "Zhao"
+      given-names: "Yue"
+  year: 2026
+  url: "https://arxiv.org/abs/2605.09502"
+  doi: "10.48550/arXiv.2605.09502"
